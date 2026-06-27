@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import tempfile
 import shutil
@@ -16,8 +17,29 @@ from app.models.host import Host
 from app.models.credential import Credential
 from app.services.encryption import decrypt
 
+# Only allow simple filenames for playbooks: letters, digits, hyphens, underscores, dots.
+# No directory separators, no leading dots (hidden files), no path traversal sequences.
+_SAFE_FILENAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_\-]*\.(yml|yaml)$')
+
+
+def _safe_playbook_filename(filename: str) -> str:
+    """Return a sanitised filename or raise ValueError on unsafe input."""
+    # Strip any directory component the caller may have smuggled in
+    basename = os.path.basename(filename)
+    if not _SAFE_FILENAME_RE.match(basename):
+        raise ValueError(f"Unsafe playbook filename: {filename!r}")
+    return basename
+
 
 def build_inventory_file(inventory: Inventory, hosts: list[Host]) -> str:
+    """
+    Build an INI-style inventory file.
+
+    Host variables are written to a separate host_vars YAML file instead of
+    being inlined into the INI line.  This eliminates the risk of a crafted
+    variable key/value injecting extra INI directives (e.g. a value containing
+    a newline followed by "[evil_group]").
+    """
     groups: dict[str, list] = {}
     for host in hosts:
         if not host.enabled:
@@ -29,14 +51,9 @@ def build_inventory_file(inventory: Inventory, hosts: list[Host]) -> str:
     for group, group_hosts in groups.items():
         lines.append(f"[{group}]")
         for h in group_hosts:
-            vars_str = ""
-            if h.variables:
-                try:
-                    hv = json.loads(h.variables)
-                    vars_str = " ".join(f"{k}={v}" for k, v in hv.items())
-                except Exception:
-                    pass
-            lines.append(f"{h.address} ansible_port={h.port} {vars_str}".strip())
+            # Only put the address and port in the INI line.
+            # Extra variables go into host_vars (written by the caller).
+            lines.append(f"{h.address} ansible_port={h.port}")
         lines.append("")
 
     return "\n".join(lines)
@@ -59,7 +76,9 @@ def run_job(job_id: int, db: Session) -> None:
     project_dir = tempfile.mkdtemp(prefix=f"job_{job_id}_", dir=settings.ANSIBLE_PROJECTS_DIR)
 
     try:
-        playbook_path = os.path.join(project_dir, playbook.filename)
+        # --- path traversal guard ---
+        safe_filename = _safe_playbook_filename(playbook.filename)
+        playbook_path = os.path.join(project_dir, safe_filename)
         with open(playbook_path, "w") as f:
             f.write(playbook.content)
 
@@ -67,6 +86,22 @@ def run_job(job_id: int, db: Session) -> None:
         inventory_path = os.path.join(project_dir, "inventory.ini")
         with open(inventory_path, "w") as f:
             f.write(inventory_content)
+
+        # Write host variables as YAML files (one per host) to avoid INI injection.
+        host_vars_dir = os.path.join(project_dir, "host_vars")
+        os.makedirs(host_vars_dir, exist_ok=True)
+        for h in hosts:
+            if not h.enabled or not h.variables:
+                continue
+            try:
+                hv = json.loads(h.variables)
+                if isinstance(hv, dict):
+                    import yaml  # PyYAML ships with ansible-runner's deps
+                    hv_path = os.path.join(host_vars_dir, h.address + ".yml")
+                    with open(hv_path, "w") as f:
+                        yaml.safe_dump(hv, f)
+            except Exception:
+                pass
 
         env_vars: dict = {}
 
@@ -106,11 +141,11 @@ def run_job(job_id: int, db: Session) -> None:
 
         result = ansible_runner.run(
             private_data_dir=project_dir,
-            playbook=playbook.filename,
+            playbook=safe_filename,
             inventory=inventory_path,
             extravars=extra_vars,
             limit=job.limit or None,
-            verbosity=job.verbosity,
+            verbosity=min(job.verbosity, 4),  # cap verbosity to avoid log flooding
             envvars=env_vars,
             quiet=False,
         )

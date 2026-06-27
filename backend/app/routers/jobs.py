@@ -121,10 +121,20 @@ async def job_output_ws(job_id: int, websocket: WebSocket, token: str = None):
 
     db = SessionLocal()
     try:
+        user = db.query(User).filter(User.username == payload.get("sub")).first()
+        if not user or not user.is_active:
+            await websocket.close(code=1008)
+            return
+
         job: Job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
             await websocket.send_text("Job not found")
             await websocket.close()
+            return
+
+        # Authorisation: only the job owner or a superuser may stream output.
+        if job.owner_id != user.id and not user.is_superuser:
+            await websocket.close(code=1008)
             return
 
         sent_len = 0

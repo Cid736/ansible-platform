@@ -1,11 +1,17 @@
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.config import settings
 from app.routers import auth, users, inventories, hosts, credentials, playbooks, jobs, dashboard
+
+limiter = Limiter(key_func=get_remote_address)
 
 
 @asynccontextmanager
@@ -35,6 +41,12 @@ def _seed_superuser():
         db.close()
 
 
+# Restrict allowed origins.  Set CORS_ORIGINS env var to a comma-separated list
+# of your front-end origins (e.g. "https://ansible.example.com").
+# Wildcards are NOT permitted when credentials are included (RFC 6454 / Fetch spec).
+_raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app = FastAPI(
     title="Ansible Platform",
     description="AWX-like platform for Ansible automation",
@@ -42,12 +54,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(auth.router)

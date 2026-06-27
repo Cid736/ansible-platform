@@ -5,15 +5,16 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-ansible}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ansible}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-ansible_platform}
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # SECURITY: Do NOT expose port 5432 to the host — DB is internal only.
+    # ports:
+    #   - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ansible}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,8 +22,9 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # SECURITY: Do NOT expose port 6379 to the host — Redis is internal only.
+    # ports:
+    #   - "6379:6379"
 
   backend:
     build:
@@ -31,7 +33,11 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ./backend:/app
+      # SECURITY: Do NOT bind-mount ./backend into the container in production.
+      # A compromised host directory or misconfigured file permission could let an
+      # attacker overwrite application code inside the running container.
+      # Remove the line below for production; use the image as-built instead.
+      # - ./backend:/app
       - ./data/ansible/projects:/ansible/projects
       - ./data/ansible/artifacts:/ansible/artifacts
     ports:
@@ -42,7 +48,7 @@ services:
       redis:
         condition: service_started
     command: >
-      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   worker:
     build:
@@ -51,7 +57,8 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ./backend:/app
+      # SECURITY: same as backend — remove the source bind-mount in production.
+      # - ./backend:/app
       - ./data/ansible/projects:/ansible/projects
       - ./data/ansible/artifacts:/ansible/artifacts
     depends_on:

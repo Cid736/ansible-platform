@@ -41,12 +41,46 @@ Open `http://localhost:3000`
 
 ## Default credentials
 
-| Field | Value |
-|---|---|
-| Username | `admin` |
-| Password | `admin123` |
+The application has **no compiled-in default password**. You must set all three variables in `.env` before the first `docker compose up`:
 
-> Change these in `.env` before exposing to a network (`FIRST_SUPERUSER_PASSWORD`).
+| Variable | Description |
+|---|---|
+| `FIRST_SUPERUSER` | Admin username (default: `admin`) |
+| `FIRST_SUPERUSER_EMAIL` | Admin e-mail |
+| `FIRST_SUPERUSER_PASSWORD` | **Required** — strong password, min 16 chars |
+
+## Security
+
+### Mandatory pre-deployment checklist
+
+- [ ] Copy `.env.example` to `.env` and fill in **every** `CHANGE_ME` value
+- [ ] Generate `SECRET_KEY`: `python -c "import secrets; print(secrets.token_urlsafe(64))"`
+- [ ] Generate `ENCRYPTION_KEY`: `docker run --rm python:3.12-slim sh -c "pip install cryptography -q && python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"`
+- [ ] Set a strong `POSTGRES_PASSWORD` (not `ansible`)
+- [ ] Set a strong `FIRST_SUPERUSER_PASSWORD` (not `admin123`)
+- [ ] Set `CORS_ORIGINS` to your actual front-end origin(s) (not `*`)
+- [ ] Keep `ALLOW_REGISTRATION=False` unless public sign-up is intentional
+- [ ] Do **not** expose ports `5432` (PostgreSQL) or `6379` (Redis) to the public internet — both are internal-only in `docker-compose.yml`
+- [ ] Remove the `./backend:/app` source bind-mount from `docker-compose.yml` before production deployment
+
+### Security architecture
+
+| Concern | Implementation |
+|---|---|
+| Authentication | JWT Bearer tokens (HS256), 60-minute expiry |
+| Passwords | bcrypt hashed, never stored or returned in plain text |
+| Credential secrets | AES-128 Fernet symmetric encryption at rest |
+| Authorisation | Per-resource owner check + superuser role |
+| CORS | Explicit origin allowlist; wildcard `*` with credentials is rejected |
+| Rate limiting | Login endpoint: 10 requests / minute per IP (slowapi) |
+| Playbook path traversal | Filename sanitised to `[A-Za-z0-9_-]+.(yml\|yaml)` before use in `os.path.join` |
+| Inventory INI injection | Host variables written to `host_vars/` YAML files, not inlined into INI |
+| WebSocket authorisation | Token validated + ownership check before streaming job output |
+| DB / Redis exposure | Both services have no host port bindings |
+
+### Reporting a vulnerability
+
+Open a private GitHub Security Advisory or e-mail the maintainer directly.
 
 ## Usage
 
@@ -58,16 +92,16 @@ Open `http://localhost:3000`
 
 ## Environment variables
 
-```env
-POSTGRES_USER=ansible
-POSTGRES_PASSWORD=ansible
-POSTGRES_DB=ansible_platform
-SECRET_KEY=change-this-in-production
-ENCRYPTION_KEY=<generate with Fernet>
-FIRST_SUPERUSER=admin
-FIRST_SUPERUSER_EMAIL=admin@example.com
-FIRST_SUPERUSER_PASSWORD=admin123
-```
+See `.env.example` for the full list with generation commands. Key variables:
+
+| Variable | Required | Description |
+|---|---|---|
+| `SECRET_KEY` | Yes | JWT signing key — generate with `secrets.token_urlsafe(64)` |
+| `ENCRYPTION_KEY` | Yes | Fernet key for credential secrets — generate with `Fernet.generate_key()` |
+| `POSTGRES_PASSWORD` | Yes | PostgreSQL password |
+| `FIRST_SUPERUSER_PASSWORD` | Yes | Initial admin password |
+| `CORS_ORIGINS` | Yes | Comma-separated allowed origins (e.g. `https://ansible.example.com`) |
+| `ALLOW_REGISTRATION` | No | `False` (default) disables public self-registration |
 
 ## Changelog
 
@@ -113,12 +147,42 @@ Abre `http://localhost:3000`
 
 ## Credenciales por defecto
 
-| Campo | Valor |
-|---|---|
-| Usuario | `admin` |
-| Contraseña | `admin123` |
+La aplicación **no tiene contraseña predeterminada compilada**. Debes establecer las tres variables en `.env` antes del primer `docker compose up`:
 
-> Cámbialas en `.env` antes de exponer en red (`FIRST_SUPERUSER_PASSWORD`).
+| Variable | Descripción |
+|---|---|
+| `FIRST_SUPERUSER` | Usuario admin (por defecto: `admin`) |
+| `FIRST_SUPERUSER_EMAIL` | Email del admin |
+| `FIRST_SUPERUSER_PASSWORD` | **Obligatorio** — contraseña fuerte, mínimo 16 caracteres |
+
+## Seguridad
+
+### Lista de verificación obligatoria antes de desplegar
+
+- [ ] Copiar `.env.example` a `.env` y rellenar **todos** los valores `CHANGE_ME`
+- [ ] Generar `SECRET_KEY`: `python -c "import secrets; print(secrets.token_urlsafe(64))"`
+- [ ] Generar `ENCRYPTION_KEY`: `docker run --rm python:3.12-slim sh -c "pip install cryptography -q && python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"`
+- [ ] Establecer `POSTGRES_PASSWORD` fuerte (no `ansible`)
+- [ ] Establecer `FIRST_SUPERUSER_PASSWORD` fuerte (no `admin123`)
+- [ ] Establecer `CORS_ORIGINS` con tus orígenes reales (no `*`)
+- [ ] Mantener `ALLOW_REGISTRATION=False` salvo que el registro público sea intencional
+- [ ] No exponer los puertos `5432` (PostgreSQL) ni `6379` (Redis) a Internet — son internos en `docker-compose.yml`
+- [ ] Eliminar el bind-mount `./backend:/app` de `docker-compose.yml` antes de producción
+
+### Arquitectura de seguridad
+
+| Aspecto | Implementación |
+|---|---|
+| Autenticación | JWT Bearer (HS256), expiración 60 minutos |
+| Contraseñas | Hash bcrypt, nunca almacenadas ni devueltas en claro |
+| Secretos de credenciales | Cifrado Fernet (AES-128) en base de datos |
+| Autorización | Comprobación de propietario por recurso + rol superusuario |
+| CORS | Lista de orígenes explícita; `*` con credenciales rechazado |
+| Rate limiting | Login: 10 peticiones / minuto por IP (slowapi) |
+| Path traversal en playbooks | Nombre de archivo validado contra `[A-Za-z0-9_-]+.(yml\|yaml)` |
+| Inyección en inventario INI | Variables de host escritas en `host_vars/` YAML, no embebidas en línea INI |
+| Autorización WebSocket | Token validado + comprobación de propietario antes de emitir output |
+| Exposición DB / Redis | Sin binding de puertos al host |
 
 ## Uso
 
@@ -130,16 +194,16 @@ Abre `http://localhost:3000`
 
 ## Variables de entorno
 
-```env
-POSTGRES_USER=ansible
-POSTGRES_PASSWORD=ansible
-POSTGRES_DB=ansible_platform
-SECRET_KEY=change-this-in-production
-ENCRYPTION_KEY=<generar con Fernet>
-FIRST_SUPERUSER=admin
-FIRST_SUPERUSER_EMAIL=admin@example.com
-FIRST_SUPERUSER_PASSWORD=admin123
-```
+Consulta `.env.example` para la lista completa con comandos de generación. Variables clave:
+
+| Variable | Obligatoria | Descripción |
+|---|---|---|
+| `SECRET_KEY` | Sí | Clave de firma JWT — generar con `secrets.token_urlsafe(64)` |
+| `ENCRYPTION_KEY` | Sí | Clave Fernet para secretos de credenciales — generar con `Fernet.generate_key()` |
+| `POSTGRES_PASSWORD` | Sí | Contraseña de PostgreSQL |
+| `FIRST_SUPERUSER_PASSWORD` | Sí | Contraseña del admin inicial |
+| `CORS_ORIGINS` | Sí | Orígenes permitidos separados por coma (ej. `https://ansible.ejemplo.com`) |
+| `ALLOW_REGISTRATION` | No | `False` (por defecto) deshabilita el autoregistro público |
 
 ## Changelog
 

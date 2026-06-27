@@ -6,6 +6,7 @@ from app.models.playbook import Playbook
 from app.models.user import User
 from app.schemas.playbook import PlaybookCreate, PlaybookUpdate, PlaybookOut, PlaybookDetail
 from app.core.deps import get_current_user
+from app.services.ansible import _safe_playbook_filename
 
 router = APIRouter(prefix="/api/playbooks", tags=["playbooks"])
 
@@ -17,6 +18,14 @@ def _get_playbook(pb_id: int, db: Session, user: User) -> Playbook:
     if pb.owner_id != user.id and not user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     return pb
+
+
+def _validated_filename(raw: str) -> str:
+    """Raise HTTP 422 if the filename is unsafe."""
+    try:
+        return _safe_playbook_filename(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/", response_model=List[PlaybookOut])
@@ -38,7 +47,8 @@ def create_playbook(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    filename = payload.filename or f"{payload.name.lower().replace(' ', '_')}.yml"
+    raw_filename = payload.filename or f"{payload.name.lower().replace(' ', '_')}.yml"
+    filename = _validated_filename(raw_filename)
     pb = Playbook(
         name=payload.name,
         description=payload.description,
@@ -61,7 +71,8 @@ async def upload_playbook(
     current_user: User = Depends(get_current_user),
 ):
     content = (await file.read()).decode("utf-8")
-    filename = file.filename or "playbook.yml"
+    raw_filename = file.filename or "playbook.yml"
+    filename = _validated_filename(raw_filename)
     pb_name = name or filename.replace(".yml", "").replace(".yaml", "")
     pb = Playbook(
         name=pb_name,
